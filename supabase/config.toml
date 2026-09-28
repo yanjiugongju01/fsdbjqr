@@ -1,8 +1,4 @@
-# dog-watch 飞书机器人 - Supabase 配置
-project_id: "nsrpehlkadklyniqcfdj"
+project_id = "nsrpehlkadklyniqcfdj"
 
-# Edge Function 配置
-functions:
-  - id: "dogwatch"
-    verify_jwt: false
-    # 让飞书能匿名 POST 进来，不做 Supabase JWT 校验
+[functions.dogwatch]
+verify_jwt = false
