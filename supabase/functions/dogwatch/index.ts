@@ -1,13 +1,15 @@
 // Supabase Edge Function: dog-watch 飞书机器人
-// 架构：dog-watch 只做"指令门面"（零token），实际搬运/朗读由云电脑扫描喇叭群执行。
+// 架构（混合）：dog-watch 在 supabase 实时识别指令(零token) → 转发内部指令到喇叭群中转
+// → 云电脑 relay 用你的飞书身份执行朗读/清理/搬运。
 //
-// 指令识别：
-//  - "朗读 <链接>" → 回"收到" + 把 [朗读] 内部指令发到喇叭群中转
-//  - "转发 <内容> 到 <群>" → 回"收到" + 把 [转发] 内部指令发到喇叭群中转
-//  - 其他 → 回"收到"（默认），不做多余动作
+// 指令识别（实时，supabase）：
+//  - "111" → 转发 [朗读最近]（云电脑扫描喇叭群新文档逐个朗读）
+//  - "222" → 转发 [清理文字]（云电脑删除喇叭群所有文字，保留文档/语音）
+//  - "朗读 <链接>" → 转发 [朗读] 到喇叭群中转
+//  - "转发 <内容> 到 <群>" → 转发 [转发] 到喇叭群中转
+//  - 其他 → 回"收到"（默认）
 //
-// 云电脑定时任务扫描喇叭群，看到 [朗读]/[转发] 前缀 → 用你的飞书身份执行。
-// 这样 dog-watch 不跑 edge-tts（避免 BOOT_ERROR），不耗 token，无权限问题。
+// 执行（云电脑）由你手动说指令 / 定时任务驱动 relay 扫描喇叭群中转消息执行。
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -196,46 +198,15 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // === 指令 0.5：222 清理文字消息（supabase 直接执行） ===
-    // 用户 @dog-watch "222" → 列出喇叭群消息，删除 text/post，保留 file/audio
-    // 注意：飞书限制应用只能删自己发的消息；删用户发的消息需用户身份(宿主token，云电脑)。
+    // === 指令 0.5：222 清理文字消息（混合架构：supabase识别→转发云电脑执行） ===
+    // 用户 @dog-watch "222" → 云电脑用你的用户身份删除喇叭群所有文字消息，保留文档和语音
     const isCleanup222 = text.trim() === "222" || text.includes("222") && (text.replace(/[^0-9]/g, "") === "222");
     if (isCleanup222) {
       console.log("222 清理文字指令，来自群:", chatId);
-      try {
-        const msgs = await listChatMessages(tenantToken, RELAY_CHAT_ID, 100);
-        const targets: { id: string; type: string; senderName: string }[] = [];
-        for (const m of msgs) {
-          const t = m?.msg_type || "";
-          if (t === "text" || t === "post") {
-            targets.push({ id: m.message_id || "", type: t, senderName: m.sender?.id_type === "app" ? "dog-watch" : "user" });
-          }
-        }
-        if (targets.length === 0) {
-          await sendText(tenantToken, chatId, `🗑️ 喇叭群当前没有文字消息可清理。`);
-          return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-        }
-        // 只删 dog-watch 自己发的(text/post)；用户消息用 app 身份删不了，返回提示
-        let appDeleted = 0;
-        let appFail = 0;
-        let userCount = 0;
-        for (const t of targets) {
-          if (t.senderName === "user") { userCount++; continue; }
-          const r = await deleteMessage(tenantToken, t.id);
-          if (r.ok) appDeleted++;
-          else appFail++;
-          if (appDeleted + appFail >= 100) break; // 防超时
-        }
-        await sendText(tenantToken, chatId, `🗑️ 222 清理（supabase 直执）：\n`
-          + `· dog-watch 自己发的文字：删除 ${appDeleted}，失败 ${appFail}\n`
-          + `· 你(用户)发的文字 ${userCount} 条：应用无权限删除，需用户身份(云电脑)执行。\n`
-          + `如需删除你发的消息，请对 dog-watch 说"清理用户消息"或用云电脑手动清理。`);
-        return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      } catch (e) {
-        console.error("222 清理异常:", e);
-        await sendText(tenantToken, chatId, `⚠️ 222 清理执行出错：${String(e)}`);
-        return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      }
+      await sendText(tenantToken, chatId, `🗑️ 收到「222」指令，将清理喇叭群里所有文字消息（含测试对话），只保留文档和语音。\n（正在执行…）`);
+      await sendText(tenantToken, RELAY_CHAT_ID, `[清理文字] 来源群=${chatId}`);
+      console.log("已转发清理文字指令到喇叭群中转");
+      return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     // === 指令 2：转发 <内容> 到 <群> ===
