@@ -46,6 +46,35 @@ async function sendText(tenantToken: string, chatId: string, text: string) {
   return resp.json();
 }
 
+// 列出群消息（分页拉全量，最多拉 total 条）
+async function listChatMessages(tenantToken: string, chatId: string, maxMsgs = 100): Promise<any[]> {
+  let all: any[] = [];
+  let pageToken = "";
+  for (let i = 0; i < 10; i++) {
+    let url = `https://open.feishu.cn/open-apis/im/v1/messages?container_id_type=chat&container_id=${chatId}&page_size=50&sort_type=ByCreateTimeDesc`;
+    if (pageToken) url += `&page_token=${encodeURIComponent(pageToken)}`;
+    const resp = await fetch(url, {
+      headers: { "Authorization": `Bearer ${tenantToken}` },
+    });
+    const j = await resp.json();
+    if (!j?.data?.items) break;
+    all = all.concat(j.data.items);
+    if (!j.data.has_more || all.length >= maxMsgs) break;
+    pageToken = j.data.page_token || "";
+  }
+  return all;
+}
+
+// 删除一条消息（返回是否成功 + 错误码）
+async function deleteMessage(tenantToken: string, messageId: string): Promise<{ ok: boolean; code?: number; msg?: string }> {
+  const resp = await fetch(`https://open.feishu.cn/open-apis/im/v1/messages/${messageId}`, {
+    method: "DELETE",
+    headers: { "Authorization": `Bearer ${tenantToken}` },
+  });
+  const j = await resp.json();
+  return { ok: !!j?.code || j?.code === 0, code: j?.code, msg: j?.msg };
+}
+
 // 从消息内容里提取指令文本
 function extractCommandText(content: string): string {
   try {
@@ -167,15 +196,46 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // === 指令 0.5：222 清理文字消息 ===
-    // 用户 @dog-watch "222" → 通知云电脑删除喇叭群里所有文字消息(含测试对话)，只保留文档和语音
+    // === 指令 0.5：222 清理文字消息（supabase 直接执行） ===
+    // 用户 @dog-watch "222" → 列出喇叭群消息，删除 text/post，保留 file/audio
+    // 注意：飞书限制应用只能删自己发的消息；删用户发的消息需用户身份(宿主token，云电脑)。
     const isCleanup222 = text.trim() === "222" || text.includes("222") && (text.replace(/[^0-9]/g, "") === "222");
     if (isCleanup222) {
       console.log("222 清理文字指令，来自群:", chatId);
-      await sendText(tenantToken, chatId, `🗑️ 收到「222」指令，将清理喇叭群里所有文字消息（含测试对话），只保留文档和语音。\n（正在执行…）`);
-      await sendText(tenantToken, RELAY_CHAT_ID, `[清理文字] 来源群=${chatId}`);
-      console.log("已转发清理文字指令到喇叭群中转");
-      return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      try {
+        const msgs = await listChatMessages(tenantToken, RELAY_CHAT_ID, 100);
+        const targets: { id: string; type: string; senderName: string }[] = [];
+        for (const m of msgs) {
+          const t = m?.msg_type || "";
+          if (t === "text" || t === "post") {
+            targets.push({ id: m.message_id || "", type: t, senderName: m.sender?.id_type === "app" ? "dog-watch" : "user" });
+          }
+        }
+        if (targets.length === 0) {
+          await sendText(tenantToken, chatId, `🗑️ 喇叭群当前没有文字消息可清理。`);
+          return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        }
+        // 只删 dog-watch 自己发的(text/post)；用户消息用 app 身份删不了，返回提示
+        let appDeleted = 0;
+        let appFail = 0;
+        let userCount = 0;
+        for (const t of targets) {
+          if (t.senderName === "user") { userCount++; continue; }
+          const r = await deleteMessage(tenantToken, t.id);
+          if (r.ok) appDeleted++;
+          else appFail++;
+          if (appDeleted + appFail >= 100) break; // 防超时
+        }
+        await sendText(tenantToken, chatId, `🗑️ 222 清理（supabase 直执）：\n`
+          + `· dog-watch 自己发的文字：删除 ${appDeleted}，失败 ${appFail}\n`
+          + `· 你(用户)发的文字 ${userCount} 条：应用无权限删除，需用户身份(云电脑)执行。\n`
+          + `如需删除你发的消息，请对 dog-watch 说"清理用户消息"或用云电脑手动清理。`);
+        return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      } catch (e) {
+        console.error("222 清理异常:", e);
+        await sendText(tenantToken, chatId, `⚠️ 222 清理执行出错：${String(e)}`);
+        return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
     }
 
     // === 指令 2：转发 <内容> 到 <群> ===
