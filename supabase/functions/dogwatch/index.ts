@@ -1,5 +1,5 @@
 // Supabase Edge Function: dog-watch 飞书机器人
-// GitHub Actions 自动部署验证（触发 CI 部署链路）
+// GitHub Actions 自动部署验证（触发 CI 部署链路）— 版本检查点
 // 架构（混合）：dog-watch 在 supabase 实时识别指令(零token) → 转发内部指令到喇叭群中转
 // → 云电脑 relay 用你的飞书身份执行朗读/清理/搬运。
 //
