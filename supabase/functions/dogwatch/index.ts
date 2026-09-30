@@ -8,7 +8,7 @@
 //  - "222" → 转发 [清理文字]（云电脑删除喇叭群所有文字，保留文档/语音）
 //  - "朗读 <链接>" → 转发 [朗读] 到喇叭群中转
 //  - "转发 <内容> 到 <群>" → 转发 [转发] 到喇叭群中转
-//  - 其他 → 回"收到"（默认）
+//  - 其他 → 静默忽略，不回执（不回"收到"）
 //
 // 执行（云电脑）由你手动说指令 / 定时任务驱动 relay 扫描喇叭群中转消息执行。
 
@@ -284,10 +284,9 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // === 默认：不匹配任何指令，简短确认（去掉冗长的已上线/聊天ID/消息ID/你说了 回显） ===
-    const replyText = `收到 ✅`;
-    await sendText(tenantToken, chatId, replyText);
-    console.log("回复结果 默认收到");
+    // === 默认：不匹配任何指令，静默处理（不回执，不刷屏） ===
+    // 用户要求去掉"收到 ✅"即时回执：收到非指令消息/文件后默默忽略，仅打日志，不回任何内容。
+    console.log("非指令消息，静默忽略（不回执）: 群=", chatId, "类型=", msgType);
 
     return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (err) {
