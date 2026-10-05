@@ -176,7 +176,9 @@ Deno.serve(async (req) => {
 
     // === 指令 0：开始巡逻 ===
     // 用户 @dog-watch "开始巡逻" → 云电脑开始轮询执行朗读/转发指令
-    const patrolMatch = text.match(/开始巡逻|巡逻|开始监听|开始工作/);
+    // 排除状态回执/确认文本（"巡逻已启动/已通知/收到『开始巡逻』"等），避免把自身确认语当成新指令反复触发
+    const isPatrolEcho = /已启动|已通知|收到「|收到"|开始轮询执行|开始监听群指令|巡逻已启动/.test(text);
+    const patrolMatch = !isPatrolEcho && text.match(/开始巡逻|巡逻|开始监听|开始工作/);
     if (patrolMatch && isAtMe) {
       console.log("巡逻指令，来自群:", chatId);
       await sendText(tenantToken, chatId, `🛡️ 收到「开始巡逻」指令，已通知云电脑启动监听。\n（云电脑最多10分钟内开始轮询执行指令）`);
